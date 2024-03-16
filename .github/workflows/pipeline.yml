@@ -21,7 +21,9 @@ on:
 
 env:
   IMAGE: divyes-python-app
-  REGISTRY_HOSTNAME: demodockeracc
+#   REGISTRY_HOSTNAME: demodockeracc
+  REGISTRY_HOSTNAME: 681089424129.dkr.ecr.ap-south-1.amazonaws.com
+  
 
 jobs:
   Build_Artifact:
