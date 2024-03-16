@@ -1,18 +1,95 @@
-name: Docker Image CI
+name: cicd-pipeline
 
 on:
   push:
-    branches: [ "main" ]
+    branches:
+      - master
+      - main
+      - 'new_branch'
+    tags:
+      - 'qa-*'
+      - 'prod-*'
   pull_request:
-    branches: [ "main" ]
+    branches:
+      - 'main'
+      - 'master'
+      - '**'
+    types:
+      - opened
+      - reopened
+      - edited
+
+env:
+  IMAGE: divyes-python-app
+  REGISTRY_HOSTNAME: demodockeracc
 
 jobs:
 
-  build:
+  Build_Artifact:
+    #needs: Smoke_Test
+    if:  (github.ref == 'refs/heads/merge_branch' && github.event_name == 'push') || (github.ref == 'refs/heads/master' && github.event_name == 'push')  || (github.ref == 'refs/heads/main' && github.event_name == 'push')  || github.event_name == 'pull_request'  || (startsWith(github.ref, 'refs/tags/qa-') && github.event_name == 'push') || (startsWith(github.ref, 'refs/tags/prod-') && github.event_name == 'push') 
 
     runs-on: ubuntu-latest
-
     steps:
-    - uses: actions/checkout@v3
-    - name: Build the Docker image
-      run: docker build . --file Dockerfile --tag my-image-name:$(date +%s)
+    - name: Checkout
+      uses: actions/checkout@v3
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v1
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v1
+      with:
+          driver: docker
+    - name: Docker meta
+      id: meta
+      uses: docker/metadata-action@v4
+      with:
+        images: |
+          ${{ env.REGISTRY_HOSTNAME }}/${{ env.IMAGE }}
+        tags: |
+          type=sha,enable=true,prefix=,suffix=,format=short
+    - name: Hadolint Dockerfile linter
+      uses: hadolint/hadolint-action@v2.0.0
+      continue-on-error: true
+      with:
+        format: json
+        dockerfile: Dockerfile
+        no-fail: true
+        output-file: hadolint-report.json
+    - name: Upload Hadolint Report
+      uses: actions/upload-artifact@v2
+      if: always()
+      with:
+        name: Hadolint Report
+        path: hadolint-report.json
+    - name: docker build
+      uses: docker/build-push-action@v3
+      with:
+        context: .
+        push: false
+        tags: ${{ steps.meta.outputs.tags }}
+        outputs: type=tar,dest=/tmp/${{ env.IMAGE }}.tar
+    - name: Run Dockle
+      continue-on-error: true
+      uses: erzz/dockle-action@v1
+      with:
+        image: ${{ steps.meta.outputs.tags }}
+    - name: Upload Dockle Report
+      uses: actions/upload-artifact@v2
+      if: always()
+      with:
+        name: Dockle Report
+        path: dockle-report.json
+    - name: Run Trivy vulnerability scanner
+      continue-on-error: true
+      uses: aquasecurity/trivy-action@master
+      with:
+        input: /tmp/${{ env.IMAGE }}.tar
+        format: json
+        output: trivy-results.json
+    - name: Upload Trivy Results
+      uses: actions/upload-artifact@v2
+      if: always()
+      with:
+        name: Trivy Report
+        path: trivy-report.json
