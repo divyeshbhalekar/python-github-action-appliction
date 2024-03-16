@@ -1,0 +1,120 @@
+name: cicd-pipeline
+
+on:
+  push:
+    branches:
+      - master
+      - main
+      - 'new_branch'
+    tags:
+      - 'qa-*'
+      - 'prod-*'
+  pull_request:
+    branches:
+      - 'main'
+      - 'master'
+      - '**'
+    types:
+      - opened
+      - reopened
+      - edited
+
+env:
+  IMAGE: divyes-python-app
+  REGISTRY_HOSTNAME: demodockeracc
+#   REGISTRY_HOSTNAME: 681089424129.dkr.ecr.ap-south-1.amazonaws.com
+  
+jobs:
+
+  Build_Artifact:
+    if: (github.ref == 'refs/heads/master' && github.event_name == 'push') || (github.ref == 'refs/heads/main' && github.event_name == 'push') || github.event_name == 'pull_request' || (startsWith(github.ref, 'refs/tags/qa-') && github.event_name == 'push') || (startsWith(github.ref, 'refs/tags/prod-') && github.event_name == 'push') || (startsWith(github.ref, 'refs/tags/stage-') && github.event_name == 'push')
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v1
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v1
+      with:
+        driver: docker
+    - name: Docker meta
+      id: meta
+      uses: docker/metadata-action@v4
+      with:
+        images: |
+          ${{ env.REGISTRY_HOSTNAME }}/${{ env.IMAGE }}
+        tags: |
+          type=sha,enable=true,prefix=,suffix=,format=short
+    - name: Install docker-slim
+      run: |
+        curl -L -o ds.tar.gz https://downloads.dockerslim.com/releases/1.40.3/dist_linux.tar.gz
+        tar -xvf ds.tar.gz
+        sudo mv dist_linux/docker-slim /usr/local/bin/
+        sudo mv dist_linux/slim-sensor /usr/local/bin/
+        sudo mv dist_linux/slim /usr/local/bin/
+        sudo chmod +x /usr/local/bin/docker-slim
+        sudo chmod +x /usr/local/bin/slim-sensor
+        sudo chmod +x /usr/local/bin/slim
+    - name: Build Slim image
+      # if: startsWith(github.ref, 'refs/tags/') == false ||  startsWith(github.ref, 'refs/tags/qa-')
+      run: |
+        docker-slim build \
+          --dockerfile Dockerfile \
+          --tag ${{ steps.meta.outputs.tags }}-slim \
+          --http-probe=true \
+          --continue-after=40 \
+          --include-shell=true \
+          --include-path /usr/local/lib/ \
+          --include-path /app \
+          .
+    - name: Save Slim Docker Image as Tar
+      run: |
+        docker save -o /tmp/slim-image.tar ${{ steps.meta.outputs.tags }}-slim
+    - name: Upload Slim Docker Image
+      uses: actions/upload-artifact@v2
+      with:
+        name: Slim Docker Image
+        path: /tmp/slim-image.tar
+
+
+  Push_Artifact_to_Registry:
+    if: (github.ref == 'refs/heads/master' && github.event_name == 'push') || (github.ref == 'refs/heads/main' && github.event_name == 'push') || (startsWith(github.ref, 'refs/tags/qa-') && github.event_name == 'push') || (startsWith(github.ref, 'refs/tags/prod-') && github.event_name == 'push') || (startsWith(github.ref, 'refs/tags/stage-') && github.event_name == 'push')
+    needs: Build_Artifact
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v1
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v1
+      with:
+          driver: docker
+    - name: Docker meta
+      id: meta
+      uses: docker/metadata-action@v4
+      with:
+        images: |
+          ${{ env.REGISTRY_HOSTNAME }}/${{ env.IMAGE }}
+        tags: |
+          type=sha,enable=true,prefix=,suffix=,format=short
+    - name: Login to Docker Hub
+      uses: docker/login-action@v2
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+    - name: Download Slim Docker Image
+      uses: actions/download-artifact@v2
+      with:
+        name: Slim Docker Image
+        path: /tmp/slim-image.tar
+    - name: Push Slim Docker image to Docker Hub
+      run: |
+        docker load -i /tmp/slim-image.tar/slim-image.tar
+        docker push ${{ steps.meta.outputs.tags }}-slim
+    - name: Delete Artifact
+      uses: geekyeggo/delete-artifact@v2
+      with:
+        name: Slim Docker Image
+        path: /tmp/slim-image.tar      
